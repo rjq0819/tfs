@@ -315,6 +315,11 @@ class DataTrainingArguments:
         if self.streaming:
             require_version("datasets>=2.0.0",
                             "The streaming feature requires `datasets>=2.0.0`")
+    
+    enc_mode: str = field(
+        default="target",
+        metadata={"help": "The encoding mode: 'target', 'source', or 'source+target'"}
+    )
 
         # if self.dataset_name is None and self.train_file is None and self.validation_file is None:
         #     raise ValueError(
@@ -520,15 +525,21 @@ def main():
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
 
-    special_list = [f'<THO{idx}>' for idx in range(model_args.ztokens)]
-    special_seq = ''.join(special_list)
-    tokenizer.add_special_tokens({'additional_special_tokens': special_list})
+    lang_tho_dict = {}
+
+    special_list = lang_tho_dict.get((data_args.decode_srclang, data_args.decode_tgtlang))
+    
+    if special_list is None:
+        special_list = [f'<THO{idx}_{data_args.decode_srclang}_{data_args.decode_tgtlang}>' for idx in range(model_args.ztokens)]
+        lang_tho_dict[(data_args.decode_srclang, data_args.decode_tgtlang)] = special_list
+        special_seq = ''.join(special_list)
+        tokenizer.add_special_tokens({'additional_special_tokens': special_list})
     # print(tokenizer)
     
     tholist = [tokenizer.convert_tokens_to_ids(
-                f'<THO{i}>') for i in range(model_args.ztokens)]
+        f'<THO_{i}_{data_args.decode_srclang}_{data_args.decode_tgtlang}>') for i in range(model_args.ztokens)]
 
-    thoid = tokenizer.convert_tokens_to_ids('<THO0>')
+    thoid = tokenizer.convert_tokens_to_ids(f'<THO_0_{data_args.decode_srclang}_{data_args.decode_tgtlang}>')
     # sepid = tokenizer.convert_tokens_to_ids(tokenizer.sep_token)
     tokenizer.pad_token_id = tokenizer.eos_token_id
     # print(tokenizer.pad_token_id)
@@ -628,7 +639,7 @@ def main():
     
     enc_block_size = block_size // 2
 
-    z_start_id = tokenizer.convert_tokens_to_ids('<THO0>')
+    z_start_id = tokenizer.convert_tokens_to_ids('<THO_0_{data_args.decode_srclang}_{data_args.decode_tgtlang}>')
     
     # for baseline
     if not hasattr(config, "ztokens"):
@@ -836,7 +847,12 @@ def main():
 
         for src, tar in zip(srclist, tarlist):
             # generating full encstrs:
-            enctail = tar
+            if data_args.enc_mode == "target":
+                enctail = tar
+            elif data_args.enc_mode == "source":
+                enctail = src
+            elif data_args.enc_mode == "source+target":
+                enctail = src + " " + tar
             enctail_ids = tokenizer.encode(enctail)
 
             if data_args.encstr == "all":
