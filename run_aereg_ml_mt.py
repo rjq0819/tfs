@@ -208,6 +208,8 @@ class ModelArguments:
 
     zorth_reg:Optional[float]=field(default=0)
 
+    mlanguages_planning:Optional[bool] = field(default=True)
+
 
 @dataclass
 class DataTrainingArguments:
@@ -316,10 +318,12 @@ class DataTrainingArguments:
             require_version("datasets>=2.0.0",
                             "The streaming feature requires `datasets>=2.0.0`")
     
-    enc_mode: str = field(
+    enc_mode: Optional[str] = field(
         default="target",
         metadata={"help": "The encoding mode: 'target', 'source', or 'source+target'"}
     )
+
+    trans_direc: Optional[str] = field(default=None, metadata={"help": "e.g., en-de|en-zh|en-ru"})
 
         # if self.dataset_name is None and self.train_file is None and self.validation_file is None:
         #     raise ValueError(
@@ -525,22 +529,46 @@ def main():
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
     # on a small vocab and want a smaller embedding size, remove this test.
 
-    lang_tho_dict = {}
+    if model_args.mlanguages_planning:
 
-    special_list = lang_tho_dict.get((data_args.decode_srclang, data_args.decode_tgtlang))
-    
-    if special_list is None:
-        special_list = [f'<THO{idx}_{data_args.decode_srclang}_{data_args.decode_tgtlang}>' for idx in range(model_args.ztokens)]
-        lang_tho_dict[(data_args.decode_srclang, data_args.decode_tgtlang)] = special_list
+        languages = data_args.trans_direc.split('|')
+
+        special_seq = {}
+        tholist = {}
+        thoid = {}
+
+        z_start_id = {}
+
+        for lang_pair in languages:
+
+            special_list = [f'<THO{idx}_{lang_pair}>' for idx in range(model_args.ztokens)]
+            special_seq = ''.join(special_list)
+            tokenizer.add_special_tokens({'additional_special_tokens': special_list})
+            
+            tholist[lang_pair] = [tokenizer.convert_tokens_to_ids(
+                    f'<THO{idx}_{lang_pair}>') for idx in range(model_args.ztokens)]
+            
+            thoid[lang_pair] = tokenizer.convert_tokens_to_ids(f'<THO0_{lang_pair}>')
+
+            z_start_id[lang_pair] = tokenizer.convert_tokens_to_ids(f'<THO0_{lang_pair}>')
+            # print(tholist)
+            # print(thoid)
+            # print(z_start_id)
+
+    else:
+        special_list = [f'<THO{idx}>' for idx in range(model_args.ztokens)]
         special_seq = ''.join(special_list)
         tokenizer.add_special_tokens({'additional_special_tokens': special_list})
-    # print(tokenizer)
+        # print(tokenizer)
     
-    tholist = [tokenizer.convert_tokens_to_ids(
-        f'<THO_{i}_{data_args.decode_srclang}_{data_args.decode_tgtlang}>') for i in range(model_args.ztokens)]
+        tholist = [tokenizer.convert_tokens_to_ids(
+                f'<THO{i}>') for i in range(model_args.ztokens)]
 
-    thoid = tokenizer.convert_tokens_to_ids(f'<THO_0_{data_args.decode_srclang}_{data_args.decode_tgtlang}>')
-    # sepid = tokenizer.convert_tokens_to_ids(tokenizer.sep_token)
+        thoid = tokenizer.convert_tokens_to_ids('<THO0>')
+        # sepid = tokenizer.convert_tokens_to_ids(tokenizer.sep_token)
+
+        z_start_id = tokenizer.convert_tokens_to_ids('<THO0>')
+
     tokenizer.pad_token_id = tokenizer.eos_token_id
     # print(tokenizer.pad_token_id)
 
@@ -638,8 +666,6 @@ def main():
         block_size = min(data_args.block_size, tokenizer.model_max_length)
     
     enc_block_size = block_size // 2
-
-    z_start_id = tokenizer.convert_tokens_to_ids('<THO_0_{data_args.decode_srclang}_{data_args.decode_tgtlang}>')
     
     # for baseline
     if not hasattr(config, "ztokens"):
@@ -839,11 +865,6 @@ def main():
             'input_ids': [],
             'attention_mask': []
         }
-        # main decoder
-        decres = {
-            'input_ids': [],
-            'attention_mask': [],
-        }
 
         for src, tar in zip(srclist, tarlist):
             # generating full encstrs:
@@ -892,38 +913,78 @@ def main():
             # dectail = tokenizer.sep_token + special_seq + tar + tokenizer.eos_token
             # dectail_ids = tokenizer.encode(dectail)
             # dectail_ids = [tokenizer.sep_token_id] + tholist + ae_dec_ids + [tokenizer.eos_token_id]
-            dectail_ids = tholist + ae_dec_ids + [tokenizer.eos_token_id]
+            if model_args.mlanguages_planning:
+                # main decoder
+                decres_l = {}
 
-            dechead = src
-            dechead_ids = tokenizer.encode(dechead)[:block_size - len(dectail_ids)]
+                for lang_pair in languages:
 
-            decres_app = dechead_ids + dectail_ids + \
-                [tokenizer.pad_token_id] * \
-                max(block_size -len(dechead_ids)-len(dectail_ids), 0)
+                    dectail_ids = tholist[lang_pair] + ae_dec_ids + [tokenizer.eos_token_id]
+
+                    dechead = src
+                    dechead_ids = tokenizer.encode(dechead)[:block_size - len(dectail_ids)]
+
+                    decres_app = dechead_ids + dectail_ids + \
+                        [tokenizer.pad_token_id] * \
+                        max(block_size -len(dechead_ids)-len(dectail_ids), 0)
             
-            # the eosid == padid
-            decres_atm = [1] * (len(dechead_ids) + len(dectail_ids)) + [0] * (block_size-len(dechead_ids)-len(dectail_ids))
+                    # the eosid == padid
+                    decres_atm = [1] * (len(dechead_ids) + len(dectail_ids)) + [0] * (block_size-len(dechead_ids)-len(dectail_ids))
             
-            assert len(decres_app) == len(decres_atm) == block_size
+                    assert len(decres_app) == len(decres_atm) == block_size
 
-            decres["input_ids"].append(decres_app)
-            decres["attention_mask"].append(decres_atm)
+                    decres_l[lang_pair] = {
+                        'input_ids': decres_app,
+                        'attention_mask': decres_atm,
+                    }
 
-        return encres,ae_decres, decres
+                    return encres,ae_decres, decres_l
+
+
+            else:
+                # main decoder
+                decres = {
+                'input_ids': [],
+                'attention_mask': [],
+                }
+
+                dectail_ids = tholist + ae_dec_ids + [tokenizer.eos_token_id]
+
+                dechead = src
+                dechead_ids = tokenizer.encode(dechead)[:block_size - len(dectail_ids)]
+
+                decres_app = dechead_ids + dectail_ids + \
+                    [tokenizer.pad_token_id] * \
+                    max(block_size -len(dechead_ids)-len(dectail_ids), 0)
+            
+                # the eosid == padid
+                decres_atm = [1] * (len(dechead_ids) + len(dectail_ids)) + [0] * (block_size-len(dechead_ids)-len(dectail_ids))
+            
+                assert len(decres_app) == len(decres_atm) == block_size
+
+                decres["input_ids"].append(decres_app)
+                decres["attention_mask"].append(decres_atm)
+
+                return encres,ae_decres, decres
 
     def tokenize_function(examples, prefix_loss):
+
         with CaptureLogger(tok_logger) as cl:
             src_sent, tar_sent = examples["input"], examples["output"]
             ins = examples["instruction"]
             src_sent = [PROMPT_DICT['prompt_input'].format_map({"instruction": ins[i], "input":src_sent[i]}) for i in range(len(ins))]
+            lang_pair_i = data_args.decode_srclang + "_" + data_args.decode_tgtlang
 
             # print(src_sent[0:2])
             # print(tar_sent[0:2])
             # exit()
 
             bs = len(src_sent)
-
-            encres, ae_decres, decres = safe_encode(srclist=src_sent, tarlist=tar_sent)
+            if model_args.mlanguages_planning:
+                encres, ae_decres, decres.l = safe_encode(srclist=src_sent, tarlist=tar_sent)
+                decres = decres.l[lang_pair_i]
+            else:
+                encres, ae_decres, decres = safe_encode(srclist=src_sent, tarlist=tar_sent)               
 
             input_ids = decres['input_ids']
             attention_mask = decres['attention_mask']
@@ -944,7 +1005,7 @@ def main():
                 if not prefix_loss:
                     pad_label[:start_pos] = [-100] * len(pad_label[:start_pos])
 
-                labels[i] = pad_label
+                    labels [i] = pad_label
 
             input_ids_enc = encres['input_ids']
             attention_mask_enc = encres['attention_mask']
@@ -977,6 +1038,7 @@ def main():
 
             'labels_ae': labels_ae
         }
+
 
     if data_args.already_tokened:
         logger.info("already_tokened")
