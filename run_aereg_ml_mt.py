@@ -534,25 +534,25 @@ def main():
         languages = data_args.trans_direc.split('|')
 
         special_seq = {}
-        tholist = {}
-        thoid = {}
+        tholist.l = {}
+        thoid.l = {}
 
         z_start_id = {}
 
         for lang_pair in languages:
 
             special_list = [f'<THO{idx}_{lang_pair}>' for idx in range(model_args.ztokens)]
-            special_seq = ''.join(special_list)
+            special_seq[lang_pair] = ''.join(special_list)
             tokenizer.add_special_tokens({'additional_special_tokens': special_list})
             
-            tholist[lang_pair] = [tokenizer.convert_tokens_to_ids(
+            tholist.l[lang_pair] = [tokenizer.convert_tokens_to_ids(
                     f'<THO{idx}_{lang_pair}>') for idx in range(model_args.ztokens)]
             
-            thoid[lang_pair] = tokenizer.convert_tokens_to_ids(f'<THO0_{lang_pair}>')
+            thoid.l[lang_pair] = tokenizer.convert_tokens_to_ids(f'<THO0_{lang_pair}>')
 
             z_start_id[lang_pair] = tokenizer.convert_tokens_to_ids(f'<THO0_{lang_pair}>')
-            # print(tholist)
-            # print(thoid)
+            # print(tholist.l)
+            # print(thoid.l)
             # print(z_start_id)
 
     else:
@@ -794,8 +794,12 @@ def main():
             #     return_tensors="pt"
             # )
             # labels = labels.input_ids.cuda()
-            
-            appseq = [special_seq] * len(x)
+            lang_pair_i = data_args.decode_srclang + "_" + data_args.decode_tgtlang
+            if model_args.mlanguages_planning:
+                appseq = [special_seq[lang_pair_i]] * len(x)
+        
+            else:
+                appseq = [special_seq] * len(x)
             appxx = tokenizer(
                 appseq,
                 return_tensors="pt"
@@ -919,7 +923,7 @@ def main():
 
                 for lang_pair in languages:
 
-                    dectail_ids = tholist[lang_pair] + ae_dec_ids + [tokenizer.eos_token_id]
+                    dectail_ids = tholist.l[lang_pair] + ae_dec_ids + [tokenizer.eos_token_id]
 
                     dechead = src
                     dechead_ids = tokenizer.encode(dechead)[:block_size - len(dectail_ids)]
@@ -983,8 +987,12 @@ def main():
             if model_args.mlanguages_planning:
                 encres, ae_decres, decres.l = safe_encode(srclist=src_sent, tarlist=tar_sent)
                 decres = decres.l[lang_pair_i]
+                tholist = tholist.l[lang_pair_i]
+                thoid = thoid.l[lang_pair_i]
             else:
-                encres, ae_decres, decres = safe_encode(srclist=src_sent, tarlist=tar_sent)               
+                encres, ae_decres, decres = safe_encode(srclist=src_sent, tarlist=tar_sent)
+                tholist = tholist
+                thoid = thoid               
 
             input_ids = decres['input_ids']
             attention_mask = decres['attention_mask']
