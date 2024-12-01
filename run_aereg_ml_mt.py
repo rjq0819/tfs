@@ -208,7 +208,7 @@ class ModelArguments:
 
     zorth_reg:Optional[float]=field(default=0)
 
-    mlanguages_planning:Optional[bool] = field(default=True)
+    mlanguages_planning:Optional[bool] = field(default=False)
 
 
 @dataclass
